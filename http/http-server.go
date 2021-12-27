@@ -32,7 +32,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 
 func logRequest(handler http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-                log.Printf("%s %s %s\n", r.RemoteAddr, r.Method, r.URL)
+                log.Printf("%s %s %s\n", r.RemoteAddr, r.Method, r.URL, r.RequestURI, "%s\t\t%s\t\t%s\t\t%v")
                 handler.ServeHTTP(w, r)
         })
 }
