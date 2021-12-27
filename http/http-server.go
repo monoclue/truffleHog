@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-        logPath := "development.log"
+        logPath := "/var/log/development.log"
         httpPort := 9001
 
         openLogFile(logPath)

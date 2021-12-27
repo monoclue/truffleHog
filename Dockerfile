@@ -13,5 +13,6 @@ WORKDIR /proj
 #RUN mkdir -p "$GOPATH/src" "$GOPATH/bin"
 
 COPY http/ /http/
+RUN touch /var/log/development.log
 
 CMD go run /http/http-server.go
