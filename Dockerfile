@@ -4,7 +4,7 @@ RUN python3 -m ensurepip
 RUN pip3 install --no-cache --upgrade pip setuptools
 RUN apk add --no-cache git && pip install gitdb2==3.0.0 trufflehog
 RUN adduser -S truffleHog
-RUN touch /var/log/development.log && chown trufflehog:trufflehog /var/log/development.log
+RUN touch /var/log/development.log && chown trufflehog /var/log/development.log
 
 USER truffleHog
 WORKDIR /proj
