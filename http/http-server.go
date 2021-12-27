@@ -1,50 +1,156 @@
 package main
 
 import (
-        "fmt"
-        "log"
-        "net/http"
-        "os"
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"sync/atomic"
+	"syscall"
+	"time"
 )
 
+type middleware func(http.Handler) http.Handler
+type middlewares []middleware
+
+func (mws middlewares) apply(hdlr http.Handler) http.Handler {
+	if len(mws) == 0 {
+		return hdlr
+	}
+	return mws[1:].apply(mws[0](hdlr))
+}
+
+func (c *controller) shutdown(ctx context.Context, server *http.Server) context.Context {
+	ctx, done := context.WithCancel(ctx)
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		defer done()
+
+		<-quit
+		signal.Stop(quit)
+		close(quit)
+
+		atomic.StoreInt64(&c.healthy, 0)
+		server.ErrorLog.Printf("Server is shutting down...\n")
+
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		server.SetKeepAlivesEnabled(false)
+		if err := server.Shutdown(ctx); err != nil {
+			server.ErrorLog.Fatalf("Could not gracefully shutdown the server: %s\n", err)
+		}
+	}()
+
+	return ctx
+}
+
+type controller struct {
+	logger        *log.Logger
+	nextRequestID func() string
+	healthy       int64
+}
+
 func main() {
-        logPath := "/var/log/development.log"
-        httpPort := 9001
+	logPath := "/var/log/development.log"
+	listenAddr := ":9001"
 
-        openLogFile(logPath)
+	openLogFile(logPath)
 
-        log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	if len(os.Args) == 2 {
+		listenAddr = os.Args[1]
+	}
 
-        http.HandleFunc("/", rootHandler)
+	logger := log.New(os.Stdout, "http: ", log.LstdFlags)
+	logger.Printf("Server is starting...")
+	logger.Printf("Logging to %v\n", logPath)
 
-        fmt.Printf("listening on %v\n", httpPort)
-        fmt.Printf("Logging to %v\n", logPath)
+	c := &controller{logger: logger, nextRequestID: func() string { return strconv.FormatInt(time.Now().UnixNano(), 36) }}
+	router := http.NewServeMux()
+	router.HandleFunc("/", c.index)
+	router.HandleFunc("/healthz", c.healthz)
 
-        err := http.ListenAndServe(fmt.Sprintf(":%d", httpPort), logRequest(http.DefaultServeMux))
-        if err != nil {
-                log.Fatal(err)
-        }
+	server := &http.Server{
+		Addr:         listenAddr,
+		Handler:      (middlewares{c.tracing, c.logging}).apply(router),
+		ErrorLog:     logger,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  15 * time.Second,
+	}
+	ctx := c.shutdown(context.Background(), server)
+
+	logger.Printf("Server is ready to handle requests at %q\n", listenAddr)
+	atomic.StoreInt64(&c.healthy, time.Now().UnixNano())
+
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		logger.Fatalf("Could not listen on %q: %s\n", listenAddr, err)
+	}
+	<-ctx.Done()
+	logger.Printf("Server stopped\n")
 }
 
-func rootHandler(w http.ResponseWriter, r *http.Request) {
-        fmt.Fprintf(w, "<h1>Hello World</h1><div>Welcome to whereever you are</div>")
+func (c *controller) index(w http.ResponseWriter, req *http.Request) {
+	if req.URL.Path != "/" {
+		http.NotFound(w, req)
+		return
+	}
+	fmt.Fprintf(w, "Hello, World!\n")
 }
 
-func logRequest(handler http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-                log.Printf("%s %s %s\n", r.RemoteAddr, r.Method, r.URL, r.RequestURI, "%s\t\t%s\t\t%s\t\t%v")
-                handler.ServeHTTP(w, r)
-        })
+func (c *controller) healthz(w http.ResponseWriter, req *http.Request) {
+	if h := atomic.LoadInt64(&c.healthy); h == 0 {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	} else {
+		fmt.Fprintf(w, "uptime: %s\n", time.Since(time.Unix(0, h)))
+	}
+}
+
+func (c *controller) logging(hdlr http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		defer func(start time.Time) {
+			requestID := w.Header().Get("X-Request-Id")
+			if requestID == "" {
+				requestID = "unknown"
+			}
+			c.logger.Println(requestID, req.Method, req.URL.Path, req.RemoteAddr, req.UserAgent(), time.Since(start))
+		}(time.Now())
+		hdlr.ServeHTTP(w, req)
+	})
+}
+
+func (c *controller) tracing(hdlr http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		requestID := req.Header.Get("X-Request-Id")
+		if requestID == "" {
+			requestID = c.nextRequestID()
+		}
+		w.Header().Set("X-Request-Id", requestID)
+		hdlr.ServeHTTP(w, req)
+	})
 }
 
 func openLogFile(logfile string) {
-        if logfile != "" {
-                lf, err := os.OpenFile(logfile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0640)
+	if logfile != "" {
+		lf, err := os.OpenFile(logfile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0640)
 
-                if err != nil {
-                        log.Fatal("OpenLogfile: os.OpenFile:", err)
-                }
+		if err != nil {
+			log.Fatal("OpenLogfile: os.OpenFile:", err)
+		}
 
-                log.SetOutput(lf)
-        }
+		log.SetOutput(lf)
+	}
 }
+
+// main_test.go
+var (
+	_ http.Handler = http.HandlerFunc((&controller{}).index)
+	_ http.Handler = http.HandlerFunc((&controller{}).healthz)
+	_ middleware   = (&controller{}).logging
+	_ middleware   = (&controller{}).tracing
+)
