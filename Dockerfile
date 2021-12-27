@@ -4,6 +4,8 @@ RUN python3 -m ensurepip
 RUN pip3 install --no-cache --upgrade pip setuptools
 RUN apk add --no-cache git && pip install gitdb2==3.0.0 trufflehog
 RUN adduser -S truffleHog
+RUN touch /var/log/development.log && chown trufflehog:trufflehog /var/log/development.log
+
 USER truffleHog
 WORKDIR /proj
 
@@ -13,6 +15,5 @@ WORKDIR /proj
 #RUN mkdir -p "$GOPATH/src" "$GOPATH/bin"
 
 COPY http/ /http/
-RUN touch /var/log/development.log
 
 CMD go run /http/http-server.go
