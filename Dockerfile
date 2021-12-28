@@ -17,4 +17,4 @@ WORKDIR /proj
 
 COPY http/ /http/
 
-CMD go run /http/http-server.go
+CMD go run /http/websocket.go
