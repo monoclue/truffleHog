@@ -9,11 +9,11 @@ on:
   schedule:
     - cron: '22 19 * * *'
   push:
-    branches: [ main ]
+    branches: [ dev ]
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
-    branches: [ main ]
+    branches: [ dev ]
 
 env:
   # Use docker.io for Docker Hub if empty
@@ -87,7 +87,7 @@ jobs:
       - name: Sign the published Docker image
         if: ${{ github.event_name != 'pull_request' }}
         env:
-          COSIGN_EXPERIMENTAL: "false"
+          COSIGN_EXPERIMENTAL: "true"
         # This step uses the identity token to provision an ephemeral certificate
         # against the sigstore community Fulcio instance.
         run: cosign sign ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
